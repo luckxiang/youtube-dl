@@ -3,17 +3,24 @@ from __future__ import unicode_literals
 
 from .common import InfoExtractor
 from ..utils import (
+    determine_ext,
+    ExtractorError,
     int_or_none,
+    mimetype2ext,
     parse_iso8601,
+    url_or_none,
 )
 
 
 class AMPIE(InfoExtractor):
     # parse Akamai Adaptive Media Player feed
     def _extract_feed_info(self, url):
-        item = self._download_json(
+        feed = self._download_json(
             url, None, 'Downloading Akamai AMP feed',
-            'Unable to download Akamai AMP feed')['channel']['item']
+            'Unable to download Akamai AMP feed')
+        item = feed.get('channel', {}).get('item')
+        if not item:
+            raise ExtractorError('%s said: %s' % (self.IE_NAME, feed['error']))
 
         video_id = item['guid']
 
@@ -28,9 +35,12 @@ class AMPIE(InfoExtractor):
             if isinstance(media_thumbnail, dict):
                 media_thumbnail = [media_thumbnail]
             for thumbnail_data in media_thumbnail:
-                thumbnail = thumbnail_data['@attributes']
+                thumbnail = thumbnail_data.get('@attributes', {})
+                thumbnail_url = url_or_none(thumbnail.get('url'))
+                if not thumbnail_url:
+                    continue
                 thumbnails.append({
-                    'url': self._proto_relative_url(thumbnail['url'], 'http:'),
+                    'url': self._proto_relative_url(thumbnail_url, 'http:'),
                     'width': int_or_none(thumbnail.get('width')),
                     'height': int_or_none(thumbnail.get('height')),
                 })
@@ -41,30 +51,39 @@ class AMPIE(InfoExtractor):
             if isinstance(media_subtitle, dict):
                 media_subtitle = [media_subtitle]
             for subtitle_data in media_subtitle:
-                subtitle = subtitle_data['@attributes']
-                lang = subtitle.get('lang') or 'en'
-                subtitles[lang] = [{'url': subtitle['href']}]
+                subtitle = subtitle_data.get('@attributes', {})
+                subtitle_href = url_or_none(subtitle.get('href'))
+                if not subtitle_href:
+                    continue
+                subtitles.setdefault(subtitle.get('lang') or 'en', []).append({
+                    'url': subtitle_href,
+                    'ext': mimetype2ext(subtitle.get('type')) or determine_ext(subtitle_href),
+                })
 
         formats = []
         media_content = get_media_node('content')
         if isinstance(media_content, dict):
             media_content = [media_content]
         for media_data in media_content:
-            media = media_data['@attributes']
-            media_type = media['type']
-            if media_type == 'video/f4m':
+            media = media_data.get('@attributes', {})
+            media_url = url_or_none(media.get('url'))
+            if not media_url:
+                continue
+            ext = mimetype2ext(media.get('type')) or determine_ext(media_url)
+            if ext == 'f4m':
                 formats.extend(self._extract_f4m_formats(
-                    media['url'] + '?hdcore=3.4.0&plugin=aasp-3.4.0.132.124',
+                    media_url + '?hdcore=3.4.0&plugin=aasp-3.4.0.132.124',
                     video_id, f4m_id='hds', fatal=False))
-            elif media_type == 'application/x-mpegURL':
+            elif ext == 'm3u8':
                 formats.extend(self._extract_m3u8_formats(
-                    media['url'], video_id, 'mp4', m3u8_id='hls', fatal=False))
+                    media_url, video_id, 'mp4', m3u8_id='hls', fatal=False))
             else:
                 formats.append({
-                    'format_id': media_data['media-category']['@attributes']['label'],
-                    'url': media['url'],
+                    'format_id': media_data.get('media-category', {}).get('@attributes', {}).get('label'),
+                    'url': media_url,
                     'tbr': int_or_none(media.get('bitrate')),
                     'filesize': int_or_none(media.get('fileSize')),
+                    'ext': ext,
                 })
 
         self._sort_formats(formats)

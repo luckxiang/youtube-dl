@@ -10,17 +10,36 @@ from ..utils import (
     ExtractorError,
     int_or_none,
     float_or_none,
-    sanitized_Request,
-    urlencode_postdata,
+    try_get,
 )
 
 
 class YandexMusicBaseIE(InfoExtractor):
     @staticmethod
     def _handle_error(response):
-        error = response.get('error')
-        if error:
-            raise ExtractorError(error, expected=True)
+        if isinstance(response, dict):
+            error = response.get('error')
+            if error:
+                raise ExtractorError(error, expected=True)
+            if response.get('type') == 'captcha' or 'captcha' in response:
+                YandexMusicBaseIE._raise_captcha()
+
+    @staticmethod
+    def _raise_captcha():
+        raise ExtractorError(
+            'YandexMusic has considered youtube-dl requests automated and '
+            'asks you to solve a CAPTCHA. You can either wait for some '
+            'time until unblocked and optionally use --sleep-interval '
+            'in future or alternatively you can go to https://music.yandex.ru/ '
+            'solve CAPTCHA, then export cookies and pass cookie file to '
+            'youtube-dl with --cookies',
+            expected=True)
+
+    def _download_webpage_handle(self, *args, **kwargs):
+        webpage = super(YandexMusicBaseIE, self)._download_webpage_handle(*args, **kwargs)
+        if 'Нам очень жаль, но&nbsp;запросы, поступившие с&nbsp;вашего IP-адреса, похожи на&nbsp;автоматические.' in webpage:
+            self._raise_captcha()
+        return webpage
 
     def _download_json(self, *args, **kwargs):
         response = super(YandexMusicBaseIE, self)._download_json(*args, **kwargs)
@@ -33,36 +52,66 @@ class YandexMusicTrackIE(YandexMusicBaseIE):
     IE_DESC = 'Яндекс.Музыка - Трек'
     _VALID_URL = r'https?://music\.yandex\.(?:ru|kz|ua|by)/album/(?P<album_id>\d+)/track/(?P<id>\d+)'
 
-    _TEST = {
+    _TESTS = [{
         'url': 'http://music.yandex.ru/album/540508/track/4878838',
         'md5': 'f496818aa2f60b6c0062980d2e00dc20',
         'info_dict': {
             'id': '4878838',
             'ext': 'mp3',
-            'title': 'Carlo Ambrosio & Fabio Di Bari, Carlo Ambrosio - Gypsy Eyes 1',
+            'title': 'Carlo Ambrosio & Fabio Di Bari - Gypsy Eyes 1',
             'filesize': 4628061,
             'duration': 193.04,
             'track': 'Gypsy Eyes 1',
             'album': 'Gypsy Soul',
             'album_artist': 'Carlo Ambrosio',
-            'artist': 'Carlo Ambrosio & Fabio Di Bari, Carlo Ambrosio',
-            'release_year': '2009',
-        }
-    }
+            'artist': 'Carlo Ambrosio & Fabio Di Bari',
+            'release_year': 2009,
+        },
+        'skip': 'Travis CI servers blocked by YandexMusic',
+    }, {
+        # multiple disks
+        'url': 'http://music.yandex.ru/album/3840501/track/705105',
+        'md5': 'ebe7b4e2ac7ac03fe11c19727ca6153e',
+        'info_dict': {
+            'id': '705105',
+            'ext': 'mp3',
+            'title': 'Hooverphonic - Sometimes',
+            'filesize': 5743386,
+            'duration': 239.27,
+            'track': 'Sometimes',
+            'album': 'The Best of Hooverphonic',
+            'album_artist': 'Hooverphonic',
+            'artist': 'Hooverphonic',
+            'release_year': 2016,
+            'genre': 'pop',
+            'disc_number': 2,
+            'track_number': 9,
+        },
+        'skip': 'Travis CI servers blocked by YandexMusic',
+    }]
 
-    def _get_track_url(self, storage_dir, track_id):
-        data = self._download_json(
-            'http://music.yandex.ru/api/v1.5/handlers/api-jsonp.jsx?action=getTrackSrc&p=download-info/%s'
-            % storage_dir,
-            track_id, 'Downloading track location JSON')
+    def _real_extract(self, url):
+        mobj = re.match(self._VALID_URL, url)
+        album_id, track_id = mobj.group('album_id'), mobj.group('id')
 
-        key = hashlib.md5(('XGRlBW9FXlekgbPrRHuSiA' + data['path'][1:] + data['s']).encode('utf-8')).hexdigest()
-        storage = storage_dir.split('.')
+        track = self._download_json(
+            'http://music.yandex.ru/handlers/track.jsx?track=%s:%s' % (track_id, album_id),
+            track_id, 'Downloading track JSON')['track']
+        track_title = track['title']
 
-        return ('http://%s/get-mp3/%s/%s?track-id=%s&from=service-10-track&similarities-experiment=default'
-                % (data['host'], key, data['ts'] + data['path'], storage[1]))
+        download_data = self._download_json(
+            'https://music.yandex.ru/api/v2.1/handlers/track/%s:%s/web-album_track-track-track-main/download/m' % (track_id, album_id),
+            track_id, 'Downloading track location url JSON',
+            headers={'X-Retpath-Y': url})
 
-    def _get_track_info(self, track):
+        fd_data = self._download_json(
+            download_data['src'], track_id,
+            'Downloading track location JSON',
+            query={'format': 'json'})
+        key = hashlib.md5(('XGRlBW9FXlekgbPrRHuSiA' + fd_data['path'][1:] + fd_data['s']).encode('utf-8')).hexdigest()
+        storage = track['storageDir'].split('.')
+        f_url = 'http://%s/get-mp3/%s/%s?track-id=%s ' % (fd_data['host'], key, fd_data['ts'] + fd_data['path'], storage[1])
+
         thumbnail = None
         cover_uri = track.get('albums', [{}])[0].get('coverUri')
         if cover_uri:
@@ -70,20 +119,33 @@ class YandexMusicTrackIE(YandexMusicBaseIE):
             if not thumbnail.startswith('http'):
                 thumbnail = 'http://' + thumbnail
 
-        track_title = track['title']
         track_info = {
-            'id': track['id'],
+            'id': track_id,
             'ext': 'mp3',
-            'url': self._get_track_url(track['storageDir'], track['id']),
+            'url': f_url,
             'filesize': int_or_none(track.get('fileSize')),
             'duration': float_or_none(track.get('durationMs'), 1000),
             'thumbnail': thumbnail,
             'track': track_title,
+            'acodec': download_data.get('codec'),
+            'abr': int_or_none(download_data.get('bitrate')),
         }
+
+        def extract_artist_name(artist):
+            decomposed = artist.get('decomposed')
+            if not isinstance(decomposed, list):
+                return artist['name']
+            parts = [artist['name']]
+            for element in decomposed:
+                if isinstance(element, dict) and element.get('name'):
+                    parts.append(element['name'])
+                elif isinstance(element, compat_str):
+                    parts.append(element)
+            return ''.join(parts)
 
         def extract_artist(artist_list):
             if artist_list and isinstance(artist_list, list):
-                artists_names = [a['name'] for a in artist_list if a.get('name')]
+                artists_names = [extract_artist_name(a) for a in artist_list if a.get('name')]
                 if artists_names:
                     return ', '.join(artists_names)
 
@@ -92,10 +154,17 @@ class YandexMusicTrackIE(YandexMusicBaseIE):
             album = albums[0]
             if isinstance(album, dict):
                 year = album.get('year')
+                disc_number = int_or_none(try_get(
+                    album, lambda x: x['trackPosition']['volume']))
+                track_number = int_or_none(try_get(
+                    album, lambda x: x['trackPosition']['index']))
                 track_info.update({
                     'album': album.get('title'),
                     'album_artist': extract_artist(album.get('artists')),
-                    'release_year': compat_str(year) if year else None,
+                    'release_year': int_or_none(year),
+                    'genre': album.get('genre'),
+                    'disc_number': disc_number,
+                    'track_number': track_number,
                 })
 
         track_artist = extract_artist(track.get('artists'))
@@ -106,17 +175,8 @@ class YandexMusicTrackIE(YandexMusicBaseIE):
             })
         else:
             track_info['title'] = track_title
+
         return track_info
-
-    def _real_extract(self, url):
-        mobj = re.match(self._VALID_URL, url)
-        album_id, track_id = mobj.group('album_id'), mobj.group('id')
-
-        track = self._download_json(
-            'http://music.yandex.ru/handlers/track.jsx?track=%s:%s' % (track_id, album_id),
-            track_id, 'Downloading track JSON')['track']
-
-        return self._get_track_info(track)
 
 
 class YandexMusicPlaylistBaseIE(YandexMusicBaseIE):
@@ -132,14 +192,23 @@ class YandexMusicAlbumIE(YandexMusicPlaylistBaseIE):
     IE_DESC = 'Яндекс.Музыка - Альбом'
     _VALID_URL = r'https?://music\.yandex\.(?:ru|kz|ua|by)/album/(?P<id>\d+)/?(\?|$)'
 
-    _TEST = {
+    _TESTS = [{
         'url': 'http://music.yandex.ru/album/540508',
         'info_dict': {
             'id': '540508',
             'title': 'Carlo Ambrosio - Gypsy Soul (2009)',
         },
         'playlist_count': 50,
-    }
+        'skip': 'Travis CI servers blocked by YandexMusic',
+    }, {
+        'url': 'https://music.yandex.ru/album/3840501',
+        'info_dict': {
+            'id': '3840501',
+            'title': 'Hooverphonic - The Best of Hooverphonic (2016)',
+        },
+        'playlist_count': 33,
+        'skip': 'Travis CI servers blocked by YandexMusic',
+    }]
 
     def _real_extract(self, url):
         album_id = self._match_id(url)
@@ -148,7 +217,7 @@ class YandexMusicAlbumIE(YandexMusicPlaylistBaseIE):
             'http://music.yandex.ru/handlers/album.jsx?album=%s' % album_id,
             album_id, 'Downloading album JSON')
 
-        entries = self._build_playlist(album['volumes'][0])
+        entries = self._build_playlist([track for volume in album['volumes'] for track in volume])
 
         title = '%s - %s' % (album['artists'][0]['name'], album['title'])
         year = album.get('year')
@@ -161,7 +230,7 @@ class YandexMusicAlbumIE(YandexMusicPlaylistBaseIE):
 class YandexMusicPlaylistIE(YandexMusicPlaylistBaseIE):
     IE_NAME = 'yandexmusic:playlist'
     IE_DESC = 'Яндекс.Музыка - Плейлист'
-    _VALID_URL = r'https?://music\.yandex\.(?:ru|kz|ua|by)/users/[^/]+/playlists/(?P<id>\d+)'
+    _VALID_URL = r'https?://music\.yandex\.(?P<tld>ru|kz|ua|by)/users/(?P<user>[^/]+)/playlists/(?P<id>\d+)'
 
     _TESTS = [{
         'url': 'http://music.yandex.ru/users/music.partners/playlists/1245',
@@ -171,54 +240,74 @@ class YandexMusicPlaylistIE(YandexMusicPlaylistBaseIE):
             'description': 'md5:3b9f27b0efbe53f2ee1e844d07155cc9',
         },
         'playlist_count': 6,
+        'skip': 'Travis CI servers blocked by YandexMusic',
     }, {
         # playlist exceeding the limit of 150 tracks shipped with webpage (see
-        # https://github.com/rg3/youtube-dl/issues/6666)
+        # https://github.com/ytdl-org/youtube-dl/issues/6666)
         'url': 'https://music.yandex.ru/users/ya.playlist/playlists/1036',
         'info_dict': {
             'id': '1036',
             'title': 'Музыка 90-х',
         },
-        'playlist_count': 310,
+        'playlist_mincount': 300,
+        'skip': 'Travis CI servers blocked by YandexMusic',
     }]
 
     def _real_extract(self, url):
-        playlist_id = self._match_id(url)
+        mobj = re.match(self._VALID_URL, url)
+        tld = mobj.group('tld')
+        user = mobj.group('user')
+        playlist_id = mobj.group('id')
 
-        webpage = self._download_webpage(url, playlist_id)
+        playlist = self._download_json(
+            'https://music.yandex.%s/handlers/playlist.jsx' % tld,
+            playlist_id, 'Downloading missing tracks JSON',
+            fatal=False,
+            headers={
+                'Referer': url,
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-Retpath-Y': url,
+            },
+            query={
+                'owner': user,
+                'kinds': playlist_id,
+                'light': 'true',
+                'lang': tld,
+                'external-domain': 'music.yandex.%s' % tld,
+                'overembed': 'false',
+            })['playlist']
 
-        mu = self._parse_json(
-            self._search_regex(
-                r'var\s+Mu\s*=\s*({.+?});\s*</script>', webpage, 'player'),
-            playlist_id)
+        tracks = playlist['tracks']
+        track_ids = [compat_str(track_id) for track_id in playlist['trackIds']]
 
-        playlist = mu['pageData']['playlist']
-        tracks, track_ids = playlist['tracks'], playlist['trackIds']
-
-        # tracks dictionary shipped with webpage is limited to 150 tracks,
+        # tracks dictionary shipped with playlist.jsx API is limited to 150 tracks,
         # missing tracks should be retrieved manually.
         if len(tracks) < len(track_ids):
-            present_track_ids = set([compat_str(track['id']) for track in tracks if track.get('id')])
-            missing_track_ids = set(map(compat_str, track_ids)) - set(present_track_ids)
-            request = sanitized_Request(
-                'https://music.yandex.ru/handlers/track-entries.jsx',
-                urlencode_postdata({
-                    'entries': ','.join(missing_track_ids),
-                    'lang': mu.get('settings', {}).get('lang', 'en'),
-                    'external-domain': 'music.yandex.ru',
-                    'overembed': 'false',
-                    'sign': mu.get('authData', {}).get('user', {}).get('sign'),
-                    'strict': 'true',
-                }))
-            request.add_header('Referer', url)
-            request.add_header('X-Requested-With', 'XMLHttpRequest')
-
+            present_track_ids = set([
+                compat_str(track['id'])
+                for track in tracks if track.get('id')])
+            missing_track_ids = [
+                track_id for track_id in track_ids
+                if track_id not in present_track_ids]
             missing_tracks = self._download_json(
-                request, playlist_id, 'Downloading missing tracks JSON', fatal=False)
+                'https://music.yandex.%s/handlers/track-entries.jsx' % tld,
+                playlist_id, 'Downloading missing tracks JSON',
+                fatal=False,
+                headers={
+                    'Referer': url,
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                query={
+                    'entries': ','.join(missing_track_ids),
+                    'lang': tld,
+                    'external-domain': 'music.yandex.%s' % tld,
+                    'overembed': 'false',
+                    'strict': 'true',
+                })
             if missing_tracks:
                 tracks.extend(missing_tracks)
 
         return self.playlist_result(
             self._build_playlist(tracks),
             compat_str(playlist_id),
-            playlist['title'], playlist.get('description'))
+            playlist.get('title'), playlist.get('description'))

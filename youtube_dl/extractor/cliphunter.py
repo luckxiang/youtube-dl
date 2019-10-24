@@ -1,19 +1,10 @@
 from __future__ import unicode_literals
 
 from .common import InfoExtractor
-from ..utils import int_or_none
-
-
-_translation_table = {
-    'a': 'h', 'd': 'e', 'e': 'v', 'f': 'o', 'g': 'f', 'i': 'd', 'l': 'n',
-    'm': 'a', 'n': 'm', 'p': 'u', 'q': 't', 'r': 's', 'v': 'p', 'x': 'r',
-    'y': 'l', 'z': 'i',
-    '$': ':', '&': '.', '(': '=', '^': '&', '=': '/',
-}
-
-
-def _decode(s):
-    return ''.join(_translation_table.get(c, c) for c in s)
+from ..utils import (
+    int_or_none,
+    url_or_none,
+)
 
 
 class CliphunterIE(InfoExtractor):
@@ -23,17 +14,28 @@ class CliphunterIE(InfoExtractor):
         (?P<id>[0-9]+)/
         (?P<seo>.+?)(?:$|[#\?])
     '''
-    _TEST = {
+    _TESTS = [{
         'url': 'http://www.cliphunter.com/w/1012420/Fun_Jynx_Maze_solo',
         'md5': 'b7c9bbd4eb3a226ab91093714dcaa480',
         'info_dict': {
             'id': '1012420',
             'ext': 'flv',
             'title': 'Fun Jynx Maze solo',
-            'thumbnail': 're:^https?://.*\.jpg$',
+            'thumbnail': r're:^https?://.*\.jpg$',
             'age_limit': 18,
-        }
-    }
+        },
+        'skip': 'Video gone',
+    }, {
+        'url': 'http://www.cliphunter.com/w/2019449/ShesNew__My_booty_girlfriend_Victoria_Paradices_pussy_filled_with_jizz',
+        'md5': '55a723c67bfc6da6b0cfa00d55da8a27',
+        'info_dict': {
+            'id': '2019449',
+            'ext': 'mp4',
+            'title': 'ShesNew - My booty girlfriend, Victoria Paradice\'s pussy filled with jizz',
+            'thumbnail': r're:^https?://.*\.jpg$',
+            'age_limit': 18,
+        },
+    }]
 
     def _real_extract(self, url):
         video_id = self._match_id(url)
@@ -49,14 +51,14 @@ class CliphunterIE(InfoExtractor):
 
         formats = []
         for format_id, f in gexo_files.items():
-            video_url = f.get('url')
+            video_url = url_or_none(f.get('url'))
             if not video_url:
                 continue
             fmt = f.get('fmt')
             height = f.get('h')
             format_id = '%s_%sp' % (fmt, height) if fmt and height else format_id
             formats.append({
-                'url': _decode(video_url),
+                'url': video_url,
                 'format_id': format_id,
                 'width': int_or_none(f.get('w')),
                 'height': int_or_none(height),

@@ -3,23 +3,24 @@ from __future__ import unicode_literals
 import re
 
 from .common import InfoExtractor
+from .kaltura import KalturaIE
 from ..utils import (
-    remove_end,
     HEADRequest,
     sanitized_Request,
+    smuggle_url,
     urlencode_postdata,
 )
 
 
 class GDCVaultIE(InfoExtractor):
-    _VALID_URL = r'https?://(?:www\.)?gdcvault\.com/play/(?P<id>\d+)/(?P<name>(\w|-)+)?'
+    _VALID_URL = r'https?://(?:www\.)?gdcvault\.com/play/(?P<id>\d+)(?:/(?P<name>[\w-]+))?'
     _NETRC_MACHINE = 'gdcvault'
     _TESTS = [
         {
             'url': 'http://www.gdcvault.com/play/1019721/Doki-Doki-Universe-Sweet-Simple',
             'md5': '7ce8388f544c88b7ac11c7ab1b593704',
             'info_dict': {
-                'id': '1019721',
+                'id': '201311826596_AWNY',
                 'display_id': 'Doki-Doki-Universe-Sweet-Simple',
                 'ext': 'mp4',
                 'title': 'Doki-Doki Universe: Sweet, Simple and Genuine (GDC Next 10)'
@@ -28,7 +29,7 @@ class GDCVaultIE(InfoExtractor):
         {
             'url': 'http://www.gdcvault.com/play/1015683/Embracing-the-Dark-Art-of',
             'info_dict': {
-                'id': '1015683',
+                'id': '201203272_1330951438328RSXR',
                 'display_id': 'Embracing-the-Dark-Art-of',
                 'ext': 'flv',
                 'title': 'Embracing the Dark Art of Mathematical Modeling in AI'
@@ -51,65 +52,60 @@ class GDCVaultIE(InfoExtractor):
         {
             'url': 'http://gdcvault.com/play/1020791/',
             'only_matching': True,
-        }
+        },
+        {
+            # Hard-coded hostname
+            'url': 'http://gdcvault.com/play/1023460/Tenacious-Design-and-The-Interface',
+            'md5': 'a8efb6c31ed06ca8739294960b2dbabd',
+            'info_dict': {
+                'id': '840376_BQRC',
+                'ext': 'mp4',
+                'display_id': 'Tenacious-Design-and-The-Interface',
+                'title': 'Tenacious Design and The Interface of \'Destiny\'',
+            },
+        },
+        {
+            # Multiple audios
+            'url': 'http://www.gdcvault.com/play/1014631/Classic-Game-Postmortem-PAC',
+            'info_dict': {
+                'id': '12396_1299111843500GMPX',
+                'ext': 'mp4',
+                'title': 'How to Create a Good Game - From My Experience of Designing Pac-Man',
+            },
+            # 'params': {
+            #     'skip_download': True,  # Requires rtmpdump
+            #     'format': 'jp',  # The japanese audio
+            # }
+        },
+        {
+            # gdc-player.html
+            'url': 'http://www.gdcvault.com/play/1435/An-American-engine-in-Tokyo',
+            'info_dict': {
+                'id': '9350_1238021887562UHXB',
+                'display_id': 'An-American-engine-in-Tokyo',
+                'ext': 'mp4',
+                'title': 'An American Engine in Tokyo:/nThe collaboration of Epic Games and Square Enix/nFor THE LAST REMINANT',
+            },
+        },
+        {
+            # Kaltura Embed
+            'url': 'https://www.gdcvault.com/play/1026180/Mastering-the-Apex-of-Scaling',
+            'info_dict': {
+                'id': '0_h1fg8j3p',
+                'ext': 'mp4',
+                'title': 'Mastering the Apex of Scaling Game Servers (Presented by Multiplay)',
+                'timestamp': 1554401811,
+                'upload_date': '20190404',
+                'uploader_id': 'joe@blazestreaming.com',
+            },
+            'params': {
+                'format': 'mp4-408',
+            },
+        },
     ]
 
-    def _parse_mp4(self, xml_description):
-        video_formats = []
-        mp4_video = xml_description.find('./metadata/mp4video')
-        if mp4_video is None:
-            return None
-
-        mobj = re.match(r'(?P<root>https?://.*?/).*', mp4_video.text)
-        video_root = mobj.group('root')
-        formats = xml_description.findall('./metadata/MBRVideos/MBRVideo')
-        for format in formats:
-            mobj = re.match(r'mp4\:(?P<path>.*)', format.find('streamName').text)
-            url = video_root + mobj.group('path')
-            vbr = format.find('bitrate').text
-            video_formats.append({
-                'url': url,
-                'vbr': int(vbr),
-            })
-        return video_formats
-
-    def _parse_flv(self, xml_description):
-        formats = []
-        akamai_url = xml_description.find('./metadata/akamaiHost').text
-        audios = xml_description.find('./metadata/audios')
-        if audios is not None:
-            for audio in audios:
-                formats.append({
-                    'url': 'rtmp://%s/ondemand?ovpfv=1.1' % akamai_url,
-                    'play_path': remove_end(audio.get('url'), '.flv'),
-                    'ext': 'flv',
-                    'vcodec': 'none',
-                    'format_id': audio.get('code'),
-                })
-        slide_video_path = xml_description.find('./metadata/slideVideo').text
-        formats.append({
-            'url': 'rtmp://%s/ondemand?ovpfv=1.1' % akamai_url,
-            'play_path': remove_end(slide_video_path, '.flv'),
-            'ext': 'flv',
-            'format_note': 'slide deck video',
-            'quality': -2,
-            'preference': -2,
-            'format_id': 'slides',
-        })
-        speaker_video_path = xml_description.find('./metadata/speakerVideo').text
-        formats.append({
-            'url': 'rtmp://%s/ondemand?ovpfv=1.1' % akamai_url,
-            'play_path': remove_end(speaker_video_path, '.flv'),
-            'ext': 'flv',
-            'format_note': 'speaker video',
-            'quality': -1,
-            'preference': -1,
-            'format_id': 'speaker',
-        })
-        return formats
-
     def _login(self, webpage_url, display_id):
-        (username, password) = self._get_login_info()
+        username, password = self._get_login_info()
         if username is None or password is None:
             self.report_warning('It looks like ' + webpage_url + ' requires a login. Try specifying a username and password and try again.')
             return None
@@ -132,10 +128,8 @@ class GDCVaultIE(InfoExtractor):
         return start_page
 
     def _real_extract(self, url):
-        mobj = re.match(self._VALID_URL, url)
-
-        video_id = mobj.group('id')
-        display_id = mobj.group('name') or video_id
+        video_id, name = re.match(self._VALID_URL, url).groups()
+        display_id = name or video_id
 
         webpage_url = 'http://www.gdcvault.com/play/' + video_id
         start_page = self._download_webpage(webpage_url, display_id)
@@ -145,12 +139,12 @@ class GDCVaultIE(InfoExtractor):
             start_page, 'url', default=None)
         if direct_url:
             title = self._html_search_regex(
-                r'<td><strong>Session Name</strong></td>\s*<td>(.*?)</td>',
+                r'<td><strong>Session Name:?</strong></td>\s*<td>(.*?)</td>',
                 start_page, 'title')
             video_url = 'http://www.gdcvault.com' + direct_url
             # resolve the url so that we can detect the correct extension
-            head = self._request_webpage(HEADRequest(video_url), video_id)
-            video_url = head.geturl()
+            video_url = self._request_webpage(
+                HEADRequest(video_url), video_id).geturl()
 
             return {
                 'id': video_id,
@@ -159,39 +153,36 @@ class GDCVaultIE(InfoExtractor):
                 'title': title,
             }
 
-        xml_root = self._html_search_regex(
-            r'<iframe src="(?P<xml_root>.*?)player.html.*?".*?</iframe>',
-            start_page, 'xml root', default=None)
-        if xml_root is None:
-            # Probably need to authenticate
-            login_res = self._login(webpage_url, display_id)
-            if login_res is None:
-                self.report_warning('Could not login.')
-            else:
-                start_page = login_res
-                # Grab the url from the authenticated page
-                xml_root = self._html_search_regex(
-                    r'<iframe src="(.*?)player.html.*?".*?</iframe>',
-                    start_page, 'xml root')
+        embed_url = KalturaIE._extract_url(start_page)
+        if embed_url:
+            embed_url = smuggle_url(embed_url, {'source_url': url})
+            ie_key = 'Kaltura'
+        else:
+            PLAYER_REGEX = r'<iframe src="(?P<xml_root>.+?)/(?:gdc-)?player.*?\.html.*?".*?</iframe>'
 
-        xml_name = self._html_search_regex(
-            r'<iframe src=".*?\?xml=(.+?\.xml).*?".*?</iframe>',
-            start_page, 'xml filename', default=None)
-        if xml_name is None:
-            # Fallback to the older format
-            xml_name = self._html_search_regex(r'<iframe src=".*?\?xmlURL=xml/(?P<xml_file>.+?\.xml).*?".*?</iframe>', start_page, 'xml filename')
+            xml_root = self._html_search_regex(
+                PLAYER_REGEX, start_page, 'xml root', default=None)
+            if xml_root is None:
+                # Probably need to authenticate
+                login_res = self._login(webpage_url, display_id)
+                if login_res is None:
+                    self.report_warning('Could not login.')
+                else:
+                    start_page = login_res
+                    # Grab the url from the authenticated page
+                    xml_root = self._html_search_regex(
+                        PLAYER_REGEX, start_page, 'xml root')
 
-        xml_description_url = xml_root + 'xml/' + xml_name
-        xml_description = self._download_xml(xml_description_url, display_id)
-
-        video_title = xml_description.find('./metadata/title').text
-        video_formats = self._parse_mp4(xml_description)
-        if video_formats is None:
-            video_formats = self._parse_flv(xml_description)
+            xml_name = self._html_search_regex(
+                r'<iframe src=".*?\?xml(?:=|URL=xml/)(.+?\.xml).*?".*?</iframe>',
+                start_page, 'xml filename')
+            embed_url = '%s/xml/%s' % (xml_root, xml_name)
+            ie_key = 'DigitallySpeaking'
 
         return {
+            '_type': 'url_transparent',
             'id': video_id,
             'display_id': display_id,
-            'title': video_title,
-            'formats': video_formats,
+            'url': embed_url,
+            'ie_key': ie_key,
         }

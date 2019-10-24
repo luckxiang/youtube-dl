@@ -1,34 +1,38 @@
 from __future__ import unicode_literals
 
-from .theplatform import ThePlatformIE
+from .theplatform import ThePlatformFeedIE
 from ..utils import (
-    xpath_text,
-    xpath_element,
-    int_or_none,
     ExtractorError,
+    int_or_none,
     find_xpath_attr,
+    xpath_element,
+    xpath_text,
+    update_url_query,
 )
 
 
-class CBSBaseIE(ThePlatformIE):
+class CBSBaseIE(ThePlatformFeedIE):
     def _parse_smil_subtitles(self, smil, namespace=None, subtitles_lang='en'):
-        closed_caption_e = find_xpath_attr(smil, self._xpath_ns('.//param', namespace), 'name', 'ClosedCaptionURL')
-        return {
-            'en': [{
-                'ext': 'ttml',
-                'url': closed_caption_e.attrib['value'],
-            }]
-        } if closed_caption_e is not None and closed_caption_e.attrib.get('value') else []
+        subtitles = {}
+        for k, ext in [('sMPTE-TTCCURL', 'tt'), ('ClosedCaptionURL', 'ttml'), ('webVTTCaptionURL', 'vtt')]:
+            cc_e = find_xpath_attr(smil, self._xpath_ns('.//param', namespace), 'name', k)
+            if cc_e is not None:
+                cc_url = cc_e.get('value')
+                if cc_url:
+                    subtitles.setdefault(subtitles_lang, []).append({
+                        'ext': ext,
+                        'url': cc_url,
+                    })
+        return subtitles
 
 
 class CBSIE(CBSBaseIE):
-    _VALID_URL = r'https?://(?:www\.)?(?:cbs\.com/shows/[^/]+/(?:video|artist)|colbertlateshow\.com/(?:video|podcasts))/[^/]+/(?P<id>[^/]+)'
+    _VALID_URL = r'(?:cbs:|https?://(?:www\.)?(?:cbs\.com/shows/[^/]+/video|colbertlateshow\.com/(?:video|podcasts))/)(?P<id>[\w-]+)'
 
     _TESTS = [{
         'url': 'http://www.cbs.com/shows/garth-brooks/video/_u7W953k6la293J7EPTd9oHkSPs6Xn6_/connect-chat-feat-garth-brooks/',
         'info_dict': {
             'id': '_u7W953k6la293J7EPTd9oHkSPs6Xn6_',
-            'display_id': 'connect-chat-feat-garth-brooks',
             'ext': 'mp4',
             'title': 'Connect Chat feat. Garth Brooks',
             'description': 'Connect with country music singer Garth Brooks, as he chats with fans on Wednesday November 27, 2013. Be sure to tune in to Garth Brooks: Live from Las Vegas, Friday November 29, at 9/8c on CBS!',
@@ -38,22 +42,7 @@ class CBSIE(CBSBaseIE):
             'uploader': 'CBSI-NEW',
         },
         'params': {
-            # rtmp download
-            'skip_download': True,
-        },
-        '_skip': 'Blocked outside the US',
-    }, {
-        'url': 'http://www.cbs.com/shows/liveonletterman/artist/221752/st-vincent/',
-        'info_dict': {
-            'id': 'WWF_5KqY3PK1',
-            'display_id': 'st-vincent',
-            'ext': 'flv',
-            'title': 'Live on Letterman - St. Vincent',
-            'description': 'Live On Letterman: St. Vincent in concert from New York\'s Ed Sullivan Theater on Tuesday, July 16, 2014.',
-            'duration': 3221,
-        },
-        'params': {
-            # rtmp download
+            # m3u8 download
             'skip_download': True,
         },
         '_skip': 'Blocked outside the US',
@@ -64,39 +53,49 @@ class CBSIE(CBSBaseIE):
         'url': 'http://www.colbertlateshow.com/podcasts/dYSwjqPs_X1tvbV_P2FcPWRa_qT6akTC/in-the-bad-room-with-stephen/',
         'only_matching': True,
     }]
-    TP_RELEASE_URL_TEMPLATE = 'http://link.theplatform.com/s/dJ5BDC/%s?manifest=m3u&mbr=true'
 
-    def _real_extract(self, url):
-        display_id = self._match_id(url)
-        webpage = self._download_webpage(url, display_id)
-        content_id = self._search_regex(
-            [r"video\.settings\.content_id\s*=\s*'([^']+)';", r"cbsplayer\.contentId\s*=\s*'([^']+)';"],
-            webpage, 'content id')
+    def _extract_video_info(self, content_id, site='cbs', mpx_acc=2198311517):
         items_data = self._download_xml(
             'http://can.cbs.com/thunder/player/videoPlayerService.php',
-            content_id, query={'partner': 'cbs', 'contentId': content_id})
+            content_id, query={'partner': site, 'contentId': content_id})
         video_data = xpath_element(items_data, './/item')
         title = xpath_text(video_data, 'videoTitle', 'title', True)
+        tp_path = 'dJ5BDC/media/guid/%d/%s' % (mpx_acc, content_id)
+        tp_release_url = 'http://link.theplatform.com/s/' + tp_path
 
+        asset_types = []
         subtitles = {}
         formats = []
+        last_e = None
         for item in items_data.findall('.//item'):
-            pid = xpath_text(item, 'pid')
-            if not pid:
+            asset_type = xpath_text(item, 'assetType')
+            if not asset_type or asset_type in asset_types or 'HLS_FPS' in asset_type or 'DASH_CENC' in asset_type:
                 continue
+            asset_types.append(asset_type)
+            query = {
+                'mbr': 'true',
+                'assetTypes': asset_type,
+            }
+            if asset_type.startswith('HLS') or asset_type in ('OnceURL', 'StreamPack'):
+                query['formats'] = 'MPEG4,M3U'
+            elif asset_type in ('RTMP', 'WIFI', '3G'):
+                query['formats'] = 'MPEG4,FLV'
             try:
                 tp_formats, tp_subtitles = self._extract_theplatform_smil(
-                    self.TP_RELEASE_URL_TEMPLATE % pid, content_id, 'Downloading %s SMIL data' % pid)
-            except ExtractorError:
+                    update_url_query(tp_release_url, query), content_id,
+                    'Downloading %s SMIL data' % asset_type)
+            except ExtractorError as e:
+                last_e = e
                 continue
             formats.extend(tp_formats)
             subtitles = self._merge_subtitles(subtitles, tp_subtitles)
+        if last_e and not formats:
+            raise last_e
         self._sort_formats(formats)
 
-        info = self.get_metadata('dJ5BDC/media/guid/2198311517/%s' % content_id, content_id)
+        info = self._extract_theplatform_metadata(tp_path, content_id)
         info.update({
             'id': content_id,
-            'display_id': display_id,
             'title': title,
             'series': xpath_text(video_data, 'seriesTitle'),
             'season_number': int_or_none(xpath_text(video_data, 'seasonNumber')),
@@ -107,3 +106,7 @@ class CBSIE(CBSBaseIE):
             'subtitles': subtitles,
         })
         return info
+
+    def _real_extract(self, url):
+        content_id = self._match_id(url)
+        return self._extract_video_info(content_id)

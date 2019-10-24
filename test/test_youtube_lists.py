@@ -44,7 +44,7 @@ class TestYoutubeLists(unittest.TestCase):
         ie = YoutubePlaylistIE(dl)
         result = ie.extract('https://www.youtube.com/watch?v=W01L70IGBgE&index=2&list=RDOQpdSVF_k_w')
         entries = result['entries']
-        self.assertTrue(len(entries) >= 20)
+        self.assertTrue(len(entries) >= 50)
         original_video = entries[0]
         self.assertEqual(original_video['id'], 'OQpdSVF_k_w')
 
@@ -61,10 +61,11 @@ class TestYoutubeLists(unittest.TestCase):
         dl = FakeYDL()
         dl.params['extract_flat'] = True
         ie = YoutubePlaylistIE(dl)
-        result = ie.extract('https://www.youtube.com/playlist?list=PLwiyx1dc3P2JR9N8gQaQN_BCvlSlap7re')
+        result = ie.extract('https://www.youtube.com/playlist?list=PL-KKIb8rvtMSrAO9YFbeM6UQrAqoFTUWv')
         self.assertIsPlaylist(result)
         for entry in result['entries']:
             self.assertTrue(entry.get('title'))
+
 
 if __name__ == '__main__':
     unittest.main()

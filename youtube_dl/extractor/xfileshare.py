@@ -4,136 +4,186 @@ from __future__ import unicode_literals
 import re
 
 from .common import InfoExtractor
+from ..compat import compat_chr
 from ..utils import (
+    decode_packed_codes,
+    determine_ext,
     ExtractorError,
     int_or_none,
-    sanitized_Request,
+    js_to_json,
     urlencode_postdata,
 )
 
 
-class XFileShareIE(InfoExtractor):
-    IE_DESC = 'XFileShare based sites: GorillaVid.in, daclips.in, movpod.in, fastvideo.in, realvid.net, filehoot.com and vidto.me'
-    _VALID_URL = r'''(?x)
-        https?://(?P<host>(?:www\.)?
-            (?:daclips\.in|gorillavid\.in|movpod\.in|fastvideo\.in|realvid\.net|filehoot\.com|vidto\.me|powerwatch\.pw))/
-        (?:embed-)?(?P<id>[0-9a-zA-Z]+)(?:-[0-9]+x[0-9]+\.html)?
-    '''
+# based on openload_decode from 2bfeee69b976fe049761dd3012e30b637ee05a58
+def aa_decode(aa_code):
+    symbol_table = [
+        ('7', '((ﾟｰﾟ) + (o^_^o))'),
+        ('6', '((o^_^o) +(o^_^o))'),
+        ('5', '((ﾟｰﾟ) + (ﾟΘﾟ))'),
+        ('2', '((o^_^o) - (ﾟΘﾟ))'),
+        ('4', '(ﾟｰﾟ)'),
+        ('3', '(o^_^o)'),
+        ('1', '(ﾟΘﾟ)'),
+        ('0', '(c^_^o)'),
+    ]
+    delim = '(ﾟДﾟ)[ﾟεﾟ]+'
+    ret = ''
+    for aa_char in aa_code.split(delim):
+        for val, pat in symbol_table:
+            aa_char = aa_char.replace(pat, val)
+        aa_char = aa_char.replace('+ ', '')
+        m = re.match(r'^\d+', aa_char)
+        if m:
+            ret += compat_chr(int(m.group(0), 8))
+        else:
+            m = re.match(r'^u([\da-f]+)', aa_char)
+            if m:
+                ret += compat_chr(int(m.group(1), 16))
+    return ret
 
-    _FILE_NOT_FOUND_REGEX = r'>(?:404 - )?File Not Found<'
+
+class XFileShareIE(InfoExtractor):
+    _SITES = (
+        (r'clipwatching\.com', 'ClipWatching'),
+        (r'gounlimited\.to', 'GoUnlimited'),
+        (r'govid\.me', 'GoVid'),
+        (r'holavid\.com', 'HolaVid'),
+        (r'streamty\.com', 'Streamty'),
+        (r'thevideobee\.to', 'TheVideoBee'),
+        (r'uqload\.com', 'Uqload'),
+        (r'vidbom\.com', 'VidBom'),
+        (r'vidlo\.us', 'vidlo'),
+        (r'vidlocker\.xyz', 'VidLocker'),
+        (r'vidshare\.tv', 'VidShare'),
+        (r'vup\.to', 'VUp'),
+        (r'xvideosharing\.com', 'XVideoSharing'),
+    )
+
+    IE_DESC = 'XFileShare based sites: %s' % ', '.join(list(zip(*_SITES))[1])
+    _VALID_URL = (r'https?://(?:www\.)?(?P<host>%s)/(?:embed-)?(?P<id>[0-9a-zA-Z]+)'
+                  % '|'.join(site for site in list(zip(*_SITES))[0]))
+
+    _FILE_NOT_FOUND_REGEXES = (
+        r'>(?:404 - )?File Not Found<',
+        r'>The file was removed by administrator<',
+    )
 
     _TESTS = [{
-        'url': 'http://gorillavid.in/06y9juieqpmi',
-        'md5': '5ae4a3580620380619678ee4875893ba',
+        'url': 'http://xvideosharing.com/fq65f94nd2ve',
+        'md5': '4181f63957e8fe90ac836fa58dc3c8a6',
         'info_dict': {
-            'id': '06y9juieqpmi',
-            'ext': 'flv',
-            'title': 'Rebecca Black My Moment Official Music Video Reaction-6GK87Rc8bzQ',
-            'thumbnail': 're:http://.*\.jpg',
-        },
-    }, {
-        'url': 'http://gorillavid.in/embed-z08zf8le23c6-960x480.html',
-        'only_matching': True,
-    }, {
-        'url': 'http://daclips.in/3rso4kdn6f9m',
-        'md5': '1ad8fd39bb976eeb66004d3a4895f106',
-        'info_dict': {
-            'id': '3rso4kdn6f9m',
+            'id': 'fq65f94nd2ve',
             'ext': 'mp4',
-            'title': 'Micro Pig piglets ready on 16th July 2009-bG0PdrCdxUc',
-            'thumbnail': 're:http://.*\.jpg',
-        }
-    }, {
-        # video with countdown timeout
-        'url': 'http://fastvideo.in/1qmdn1lmsmbw',
-        'md5': '8b87ec3f6564a3108a0e8e66594842ba',
-        'info_dict': {
-            'id': '1qmdn1lmsmbw',
-            'ext': 'mp4',
-            'title': 'Man of Steel - Trailer',
-            'thumbnail': 're:http://.*\.jpg',
-        },
-    }, {
-        'url': 'http://realvid.net/ctn2y6p2eviw',
-        'md5': 'b2166d2cf192efd6b6d764c18fd3710e',
-        'info_dict': {
-            'id': 'ctn2y6p2eviw',
-            'ext': 'flv',
-            'title': 'rdx 1955',
-            'thumbnail': 're:http://.*\.jpg',
-        },
-    }, {
-        'url': 'http://movpod.in/0wguyyxi1yca',
-        'only_matching': True,
-    }, {
-        'url': 'http://filehoot.com/3ivfabn7573c.html',
-        'info_dict': {
-            'id': '3ivfabn7573c',
-            'ext': 'mp4',
-            'title': 'youtube-dl test video \'äBaW_jenozKc.mp4.mp4',
-            'thumbnail': 're:http://.*\.jpg',
-        }
-    }, {
-        'url': 'http://vidto.me/ku5glz52nqe1.html',
-        'info_dict': {
-            'id': 'ku5glz52nqe1',
-            'ext': 'mp4',
-            'title': 'test'
-        }
-    }, {
-        'url': 'http://powerwatch.pw/duecjibvicbu',
-        'info_dict': {
-            'id': 'duecjibvicbu',
-            'ext': 'mp4',
-            'title': 'Big Buck Bunny trailer',
+            'title': 'sample',
+            'thumbnail': r're:http://.*\.jpg',
         },
     }]
 
-    def _real_extract(self, url):
-        mobj = re.match(self._VALID_URL, url)
-        video_id = mobj.group('id')
+    @staticmethod
+    def _extract_urls(webpage):
+        return [
+            mobj.group('url')
+            for mobj in re.finditer(
+                r'<iframe\b[^>]+\bsrc=(["\'])(?P<url>(?:https?:)?//(?:%s)/embed-[0-9a-zA-Z]+.*?)\1'
+                % '|'.join(site for site in list(zip(*XFileShareIE._SITES))[0]),
+                webpage)]
 
-        url = 'http://%s/%s' % (mobj.group('host'), video_id)
+    def _real_extract(self, url):
+        host, video_id = re.match(self._VALID_URL, url).groups()
+
+        url = 'https://%s/' % host + ('embed-%s.html' % video_id if host in ('govid.me', 'vidlo.us') else video_id)
         webpage = self._download_webpage(url, video_id)
 
-        if re.search(self._FILE_NOT_FOUND_REGEX, webpage) is not None:
+        if any(re.search(p, webpage) for p in self._FILE_NOT_FOUND_REGEXES):
             raise ExtractorError('Video %s does not exist' % video_id, expected=True)
 
         fields = self._hidden_inputs(webpage)
 
-        if fields['op'] == 'download1':
+        if fields.get('op') == 'download1':
             countdown = int_or_none(self._search_regex(
                 r'<span id="countdown_str">(?:[Ww]ait)?\s*<span id="cxc">(\d+)</span>\s*(?:seconds?)?</span>',
                 webpage, 'countdown', default=None))
             if countdown:
                 self._sleep(countdown, video_id)
 
-            post = urlencode_postdata(fields)
-
-            req = sanitized_Request(url, post)
-            req.add_header('Content-type', 'application/x-www-form-urlencoded')
-
-            webpage = self._download_webpage(req, video_id, 'Downloading video page')
+            webpage = self._download_webpage(
+                url, video_id, 'Downloading video page',
+                data=urlencode_postdata(fields), headers={
+                    'Referer': url,
+                    'Content-type': 'application/x-www-form-urlencoded',
+                })
 
         title = (self._search_regex(
-            [r'style="z-index: [0-9]+;">([^<]+)</span>',
+            (r'style="z-index: [0-9]+;">([^<]+)</span>',
              r'<td nowrap>([^<]+)</td>',
              r'h4-fine[^>]*>([^<]+)<',
-             r'>Watch (.+) ',
-             r'<h2 class="video-page-head">([^<]+)</h2>'],
-            webpage, 'title', default=None) or self._og_search_title(webpage)).strip()
-        video_url = self._search_regex(
-            [r'file\s*:\s*["\'](http[^"\']+)["\'],',
-             r'file_link\s*=\s*\'(https?:\/\/[0-9a-zA-z.\/\-_]+)'],
-            webpage, 'file url')
-        thumbnail = self._search_regex(
-            r'image\s*:\s*["\'](http[^"\']+)["\'],', webpage, 'thumbnail', default=None)
+             r'>Watch (.+)[ <]',
+             r'<h2 class="video-page-head">([^<]+)</h2>',
+             r'<h2 style="[^"]*color:#403f3d[^"]*"[^>]*>([^<]+)<',  # streamin.to
+             r'title\s*:\s*"([^"]+)"'),  # govid.me
+            webpage, 'title', default=None) or self._og_search_title(
+            webpage, default=None) or video_id).strip()
 
-        formats = [{
-            'format_id': 'sd',
-            'url': video_url,
-            'quality': 1,
-        }]
+        for regex, func in (
+                (r'(eval\(function\(p,a,c,k,e,d\){.+)', decode_packed_codes),
+                (r'(ﾟ.+)', aa_decode)):
+            obf_code = self._search_regex(regex, webpage, 'obfuscated code', default=None)
+            if obf_code:
+                webpage = webpage.replace(obf_code, func(obf_code))
+
+        formats = []
+
+        jwplayer_data = self._search_regex(
+            [
+                r'jwplayer\("[^"]+"\)\.load\(\[({.+?})\]\);',
+                r'jwplayer\("[^"]+"\)\.setup\(({.+?})\);',
+            ], webpage,
+            'jwplayer data', default=None)
+        if jwplayer_data:
+            jwplayer_data = self._parse_json(
+                jwplayer_data.replace(r"\'", "'"), video_id, js_to_json)
+            if jwplayer_data:
+                formats = self._parse_jwplayer_data(
+                    jwplayer_data, video_id, False,
+                    m3u8_id='hls', mpd_id='dash')['formats']
+
+        if not formats:
+            urls = []
+            for regex in (
+                    r'(?:file|src)\s*:\s*(["\'])(?P<url>http(?:(?!\1).)+\.(?:m3u8|mp4|flv)(?:(?!\1).)*)\1',
+                    r'file_link\s*=\s*(["\'])(?P<url>http(?:(?!\1).)+)\1',
+                    r'addVariable\((\\?["\'])file\1\s*,\s*(\\?["\'])(?P<url>http(?:(?!\2).)+)\2\)',
+                    r'<embed[^>]+src=(["\'])(?P<url>http(?:(?!\1).)+\.(?:m3u8|mp4|flv)(?:(?!\1).)*)\1'):
+                for mobj in re.finditer(regex, webpage):
+                    video_url = mobj.group('url')
+                    if video_url not in urls:
+                        urls.append(video_url)
+
+            sources = self._search_regex(
+                r'sources\s*:\s*(\[(?!{)[^\]]+\])', webpage, 'sources', default=None)
+            if sources:
+                urls.extend(self._parse_json(sources, video_id))
+
+            formats = []
+            for video_url in urls:
+                if determine_ext(video_url) == 'm3u8':
+                    formats.extend(self._extract_m3u8_formats(
+                        video_url, video_id, 'mp4',
+                        entry_protocol='m3u8_native', m3u8_id='hls',
+                        fatal=False))
+                else:
+                    formats.append({
+                        'url': video_url,
+                        'format_id': 'sd',
+                    })
+        self._sort_formats(formats)
+
+        thumbnail = self._search_regex(
+            [
+                r'<video[^>]+poster="([^"]+)"',
+                r'(?:image|poster)\s*:\s*["\'](http[^"\']+)["\'],',
+            ], webpage, 'thumbnail', default=None)
 
         return {
             'id': video_id,

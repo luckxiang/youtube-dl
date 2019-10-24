@@ -1,30 +1,38 @@
 from __future__ import unicode_literals
 
-import re
-
-from .common import InfoExtractor
+from .cbs import CBSBaseIE
 
 
-class CBSSportsIE(InfoExtractor):
-    _VALID_URL = r'https?://www\.cbssports\.com/video/player/(?P<section>[^/]+)/(?P<id>[^/]+)'
+class CBSSportsIE(CBSBaseIE):
+    _VALID_URL = r'https?://(?:www\.)?cbssports\.com/[^/]+/(?:video|news)/(?P<id>[^/?#&]+)'
 
-    _TEST = {
-        'url': 'http://www.cbssports.com/video/player/tennis/318462531970/0/us-open-flashbacks-1990s',
+    _TESTS = [{
+        'url': 'https://www.cbssports.com/nba/video/donovan-mitchell-flashes-star-potential-in-game-2-victory-over-thunder/',
         'info_dict': {
-            'id': '_d5_GbO8p1sT',
-            'ext': 'flv',
-            'title': 'US Open flashbacks: 1990s',
-            'description': 'Bill Macatee relives the best moments in US Open history from the 1990s.',
+            'id': '1214315075735',
+            'ext': 'mp4',
+            'title': 'Donovan Mitchell flashes star potential in Game 2 victory over Thunder',
+            'description': 'md5:df6f48622612c2d6bd2e295ddef58def',
+            'timestamp': 1524111457,
+            'upload_date': '20180419',
+            'uploader': 'CBSI-NEW',
         },
-    }
+        'params': {
+            # m3u8 download
+            'skip_download': True,
+        }
+    }, {
+        'url': 'https://www.cbssports.com/nba/news/nba-playoffs-2018-watch-76ers-vs-heat-game-3-series-schedule-tv-channel-online-stream/',
+        'only_matching': True,
+    }]
+
+    def _extract_video_info(self, filter_query, video_id):
+        return self._extract_feed_info('dJ5BDC', 'VxxJg8Ymh8sE', filter_query, video_id)
 
     def _real_extract(self, url):
-        mobj = re.match(self._VALID_URL, url)
-        section = mobj.group('section')
-        video_id = mobj.group('id')
-        all_videos = self._download_json(
-            'http://www.cbssports.com/data/video/player/getVideos/%s?as=json' % section,
-            video_id)
-        # The json file contains the info of all the videos in the section
-        video_info = next(v for v in all_videos if v['pcid'] == video_id)
-        return self.url_result('theplatform:%s' % video_info['pid'], 'ThePlatform')
+        display_id = self._match_id(url)
+        webpage = self._download_webpage(url, display_id)
+        video_id = self._search_regex(
+            [r'(?:=|%26)pcid%3D(\d+)', r'embedVideo(?:Container)?_(\d+)'],
+            webpage, 'video id')
+        return self._extract_video_info('byId=%s' % video_id, video_id)

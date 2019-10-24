@@ -1,15 +1,15 @@
 from __future__ import unicode_literals
 
 from .common import InfoExtractor
+from .fox import FOXIE
 from ..utils import (
     smuggle_url,
     url_basename,
-    update_url_query,
 )
 
 
-class NationalGeographicIE(InfoExtractor):
-    IE_NAME = 'natgeo'
+class NationalGeographicVideoIE(InfoExtractor):
+    IE_NAME = 'natgeo:video'
     _VALID_URL = r'https?://video\.nationalgeographic\.com/.*?'
 
     _TESTS = [
@@ -61,53 +61,22 @@ class NationalGeographicIE(InfoExtractor):
         }
 
 
-class NationalGeographicChannelIE(InfoExtractor):
-    IE_NAME = 'natgeo:channel'
-    _VALID_URL = r'https?://channel\.nationalgeographic\.com/(?:wild/)?[^/]+/videos/(?P<id>[^/?]+)'
-
-    _TESTS = [
-        {
-            'url': 'http://channel.nationalgeographic.com/the-story-of-god-with-morgan-freeman/videos/uncovering-a-universal-knowledge/',
-            'md5': '518c9aa655686cf81493af5cc21e2a04',
-            'info_dict': {
-                'id': 'nB5vIAfmyllm',
-                'ext': 'mp4',
-                'title': 'Uncovering a Universal Knowledge',
-                'description': 'md5:1a89148475bf931b3661fcd6ddb2ae3a',
-                'timestamp': 1458680907,
-                'upload_date': '20160322',
-                'uploader': 'NEWA-FNG-NGTV',
-            },
-            'add_ie': ['ThePlatform'],
+class NationalGeographicTVIE(FOXIE):
+    _VALID_URL = r'https?://(?:www\.)?nationalgeographic\.com/tv/watch/(?P<id>[\da-fA-F]+)'
+    _TESTS = [{
+        'url': 'https://www.nationalgeographic.com/tv/watch/6a875e6e734b479beda26438c9f21138/',
+        'info_dict': {
+            'id': '6a875e6e734b479beda26438c9f21138',
+            'ext': 'mp4',
+            'title': 'Why Nat Geo? Valley of the Boom',
+            'description': 'The lives of prominent figures in the tech world, including their friendships, rivalries, victories and failures.',
+            'timestamp': 1542662458,
+            'upload_date': '20181119',
+            'age_limit': 14,
         },
-        {
-            'url': 'http://channel.nationalgeographic.com/wild/destination-wild/videos/the-stunning-red-bird-of-paradise/',
-            'md5': 'c4912f656b4cbe58f3e000c489360989',
-            'info_dict': {
-                'id': '3TmMv9OvGwIR',
-                'ext': 'mp4',
-                'title': 'The Stunning Red Bird of Paradise',
-                'description': 'md5:7bc8cd1da29686be4d17ad1230f0140c',
-                'timestamp': 1459362152,
-                'upload_date': '20160330',
-                'uploader': 'NEWA-FNG-NGTV',
-            },
-            'add_ie': ['ThePlatform'],
+        'params': {
+            'skip_download': True,
         },
-    ]
-
-    def _real_extract(self, url):
-        display_id = self._match_id(url)
-        webpage = self._download_webpage(url, display_id)
-        release_url = self._search_regex(
-            r'video_auth_playlist_url\s*=\s*"([^"]+)"',
-            webpage, 'release url')
-
-        return {
-            '_type': 'url_transparent',
-            'ie_key': 'ThePlatform',
-            'url': smuggle_url(
-                update_url_query(release_url, {'mbr': 'true', 'switch': 'http'}),
-                {'force_smil_url': True}),
-            'display_id': display_id,
-        }
+    }]
+    _HOME_PAGE_URL = 'https://www.nationalgeographic.com/tv/'
+    _API_KEY = '238bb0a0c2aba67922c48709ce0c06fd'
